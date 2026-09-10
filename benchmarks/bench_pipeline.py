@@ -543,8 +543,12 @@ def run_variant(variant, dataset, workdir, legacy_script, threads, cold,
         training = run_phase('training', variant, dataset, workdir, pristine,
                              decoded_dir, legacy_script, threads, cold)
         if training['killed']:
-            # No decoder was written, so there is nothing to predict from.
-            return (training, {'killed': True, 'wall_seconds': 0.0},
+            # No decoder was written, so there is nothing to predict from:
+            # not run, which is a different thing from not fitting in memory.
+            print('  %s prediction not run: training left no decoder.'
+                  % variant)
+            return (training,
+                    {'killed': True, 'not_run': True, 'wall_seconds': 0.0},
                     tree_bytes(pristine), decoder_dir, decoded_dir)
 
         shutil.copytree(pristine, decoder_dir)
@@ -658,28 +662,41 @@ def change(legacy, factorized):
 
 
 KILLED = 'OOM (SIGKILL)'
+NOT_RUN = 'not run'
+
+
+def _missing(report):
+    '''Why a phase has no numbers: it was killed, or it never started.'''
+    if not report.get('killed'):
+        return None
+    return NOT_RUN if report.get('not_run') else KILLED
 
 
 def _totals(result):
-    '''Headline figures of one variant, or ``None`` where it was killed.'''
+    '''Headline figures of one variant as ``(value, missing_reason)``.'''
     training, prediction, stored = result[:3]
+    no_training, no_prediction = _missing(training), _missing(prediction)
 
-    def phase(report, key):
-        return None if report.get('killed') else report[key]
+    def phase(report, key, missing):
+        return (None, missing) if missing else (report[key], None)
 
     def both(key):
-        first, second = phase(training, key), phase(prediction, key)
-        return None if first is None or second is None else first + second
+        missing = no_training or no_prediction
+        if missing:
+            return (None, missing)
+        return (training[key] + prediction[key], None)
 
     return {
-        'training time': phase(training, 'wall_seconds'),
-        'prediction time': phase(prediction, 'wall_seconds'),
+        'training time': phase(training, 'wall_seconds', no_training),
+        'prediction time': phase(prediction, 'wall_seconds', no_prediction),
         'total time': both('wall_seconds'),
-        'peak memory (training)': phase(training, 'peak_rss'),
-        'peak memory (prediction)': phase(prediction, 'peak_rss'),
+        'peak memory (training)': phase(training, 'peak_rss', no_training),
+        'peak memory (prediction)': phase(prediction, 'peak_rss',
+                                          no_prediction),
         'total bytes read': both('rchar'),
         'total bytes written': both('wchar'),
-        'decoder size': None if training.get('killed') else stored,
+        'decoder size': ((None, no_training) if no_training
+                         else (stored, None)),
     }
 
 
@@ -694,20 +711,25 @@ def print_headline(results):
     print('-' * len(header))
     for label in legacy:
         cells = []
-        for value in (legacy[label], factorized[label]):
-            if value is None:
-                cells.append(KILLED)
+        for value, missing in (legacy[label], factorized[label]):
+            if missing:
+                cells.append(missing)
             elif label in seconds:
                 cells.append('%.1f s' % value)
             else:
                 cells.append(human_bytes(value))
-        if legacy[label] is None or factorized[label] is None:
-            note = ('legacy did not fit' if legacy[label] is None
+        if legacy[label][1] or factorized[label][1]:
+            note = ('legacy did not fit' if legacy[label][1]
                     else 'factorized did not fit')
         else:
-            note = change(legacy[label], factorized[label])
+            note = change(legacy[label][0], factorized[label][0])
         print('%-26s | %13s | %13s | %18s'
               % (label, cells[0], cells[1], note))
+    if any(value[1] for value in list(legacy.values())
+           + list(factorized.values())):
+        print('%s: the phase was killed by the OOM killer. %s: it never '
+              'started, because the training it needed a decoder from was '
+              'killed.' % (KILLED, NOT_RUN))
 
 
 def print_phases(results, baseline):
@@ -721,9 +743,10 @@ def print_phases(results, baseline):
     for variant in ('legacy', 'factorized'):
         for name, report in (('training', results[variant][0]),
                              ('prediction', results[variant][1])):
-            if report.get('killed'):
+            missing = _missing(report)
+            if missing:
                 print('%-12s | %-10s | %8s | %13s | %10s | %10s | %11s | %11s'
-                      % (variant, name, '-', KILLED, '-', '-', '-', '-'))
+                      % (variant, name, '-', missing, '-', '-', '-', '-'))
                 continue
             print('%-12s | %-10s | %8.1f | %13s | %10s | %10s | %11s | %11s'
                   % (variant, name, report['wall_seconds'],
@@ -765,8 +788,12 @@ def print_breakdown(results):
               % (variant, report['model_load_seconds'],
                  report['feature_seconds'], inference,
                  report['combine_seconds'], rest))
-    print('"the rest" is reading the test fMRI, averaging it and writing the '
-          'decoded features -- work both variants do identically.')
+    print('"the rest" is everything outside those stages: reading the test '
+          'fMRI, averaging it and writing the decoded features, which both '
+          'variants do identically, plus -- on the factorized side only -- '
+          'computing the training-feature statistics (y_mean/y_norm) and '
+          'writing them into the decoder for evaluation.py, which a legacy '
+          'decoder already carries from training.')
 
 
 def print_extrapolation():
@@ -894,7 +921,8 @@ def main():
               'the same factor, so their ratios are the profile\'s.'
               % args.scale)
     print('Machine memory: %s. A phase that does not fit is reported as '
-          '%s rather than ending the run.'
+          '%s rather than ending the run; the other variant is still '
+          'measured.'
           % (human_bytes(os.sysconf('SC_PAGE_SIZE')
                          * os.sysconf('SC_PHYS_PAGES')), KILLED))
     print('%s page cache; best of %d; %d BLAS thread(s); training and '

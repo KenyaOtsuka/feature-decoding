@@ -117,7 +117,7 @@ than substituting a narrower layer: **50 176 units, 5000 voxels, 3000 trials**
 | variant | phase | time [s] | peak RSS | read | written | device read | device written |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | legacy | training | — | **OOM (SIGKILL)** | — | — | — | — |
-| legacy | prediction | — | not run (no decoder) | — | — | — | — |
+| legacy | prediction | — | not run (training left no decoder) | — | — | — | — |
 | factorized | training | 14.0 | 2.5 GB | 493.2 MB | 46.0 MB | 652.4 MB | 46.0 MB |
 | factorized | prediction | 12.5 | 1.1 GB | 512.8 MB | 18.2 MB | 475.8 MB | 18.4 MB |
 | (reference) | imports only | 3.2 | 160.5 MB | 34.2 MB | 3.2 KB | 0 B | 0 B |
@@ -147,11 +147,17 @@ under every row, and the reason no row reads less than ~34 MB or peaks below
 | conv (scaled) | legacy | 4.4 | 0.0 | 0.3 | 0.0 | 0.4 |
 | conv (scaled) | factorized | 0.0 | 2.1 | 0.0 | 0.0 | 1.7 |
 
-"the rest" is reading the test fMRI, averaging it and writing the decoded
-features — identical work for both. The two paths pay in different places: the
-factorized run loads per-stimulus feature files (3600 on `fc`, 600 on `conv`),
-the legacy run loads its coefficient matrices (1.4 GB on `fc`, 958 MB on
-`conv`). Which is worse depends on the layer.
+"the rest" is everything outside those four stages. Both variants read the
+test fMRI, average it and write the decoded features; the factorized run
+additionally computes the training-feature statistics (`y_mean`/`y_norm`, two
+passes over the layer) and writes them into the decoder for `evaluation.py`,
+which a legacy decoder already carries from training — so "the rest" is not
+the same work on both rows.
+
+The named stages show where each path pays: the factorized run loads
+per-stimulus feature files (3600 on `fc`, 1200 on full-size `conv`, 600 on the
+scaled one), the legacy run loads its coefficient matrices (1.4 GB on `fc`,
+958 MB on the scaled `conv`). Which is worse depends on the layer.
 
 ### Compute and stored size against `d_out` (`bench_ridge_factorization.py`)
 
