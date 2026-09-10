@@ -505,21 +505,19 @@ def run_phase(phase, variant, dataset, workdir, decoder_dir, decoded_dir,
                        stdout=subprocess.DEVNULL, stderr=None)
     except subprocess.CalledProcessError as error:
         if error.returncode == -signal.SIGKILL:
-            # Not a crash but a result: the phase did not fit in this
-            # machine's memory.  Scaling keeps d_out : d_in : n, so the
-            # smaller run is still the same regime.
-            raise SystemExit(
-                '%s %s was killed (SIGKILL): it did not fit in this machine\'s '
-                'memory. Re-run with --scale (e.g. --scale 2), which divides '
-                'trials, voxels and output units by one common factor and so '
-                'keeps the profile\'s d_out : d_in : n.'
-                % (variant, phase))
+            # Not a crash but a result: this phase did not fit in this
+            # machine's memory.  The other variant is still measured -- that
+            # it *does* fit at the same size is the interesting half.
+            print('  %s %s was killed (SIGKILL): it did not fit in memory.'
+                  % (variant, phase))
+            return {'killed': True, 'wall_seconds': perf_counter() - start}
         raise
     wall = perf_counter() - start
 
     with open(report_path) as f:
         report = json.load(f)
     report['wall_seconds'] = wall
+    report['killed'] = False
     return report
 
 
@@ -544,6 +542,10 @@ def run_variant(variant, dataset, workdir, legacy_script, threads, cold,
             evict(input_files(dataset))
         training = run_phase('training', variant, dataset, workdir, pristine,
                              decoded_dir, legacy_script, threads, cold)
+        if training['killed']:
+            # No decoder was written, so there is nothing to predict from.
+            return (training, {'killed': True, 'wall_seconds': 0.0},
+                    tree_bytes(pristine), decoder_dir, decoded_dir)
 
         shutil.copytree(pristine, decoder_dir)
         if cold:
@@ -554,6 +556,8 @@ def run_variant(variant, dataset, workdir, legacy_script, threads, cold,
 
         stored = tree_bytes(pristine)
         candidate = (training, prediction, stored, decoder_dir, decoded_dir)
+        if prediction['killed']:
+            return candidate
         if best is None or (training['wall_seconds']
                             + prediction['wall_seconds']
                             < best[0]['wall_seconds']
@@ -653,40 +657,57 @@ def change(legacy, factorized):
     return 'about the same'
 
 
+KILLED = 'OOM (SIGKILL)'
+
+
+def _totals(result):
+    '''Headline figures of one variant, or ``None`` where it was killed.'''
+    training, prediction, stored = result[:3]
+
+    def phase(report, key):
+        return None if report.get('killed') else report[key]
+
+    def both(key):
+        first, second = phase(training, key), phase(prediction, key)
+        return None if first is None or second is None else first + second
+
+    return {
+        'training time': phase(training, 'wall_seconds'),
+        'prediction time': phase(prediction, 'wall_seconds'),
+        'total time': both('wall_seconds'),
+        'peak memory (training)': phase(training, 'peak_rss'),
+        'peak memory (prediction)': phase(prediction, 'peak_rss'),
+        'total bytes read': both('rchar'),
+        'total bytes written': both('wchar'),
+        'decoder size': None if training.get('killed') else stored,
+    }
+
+
 def print_headline(results):
-    legacy_train, legacy_predict, legacy_stored = results['legacy'][:3]
-    new_train, new_predict, new_stored = results['factorized'][:3]
+    legacy = _totals(results['legacy'])
+    factorized = _totals(results['factorized'])
+    seconds = ('training time', 'prediction time', 'total time')
 
-    rows = (
-        ('training time', legacy_train['wall_seconds'],
-         new_train['wall_seconds'], 'seconds'),
-        ('prediction time', legacy_predict['wall_seconds'],
-         new_predict['wall_seconds'], 'seconds'),
-        ('total time', legacy_train['wall_seconds']
-         + legacy_predict['wall_seconds'],
-         new_train['wall_seconds'] + new_predict['wall_seconds'], 'seconds'),
-        ('peak memory (training)', legacy_train['peak_rss'],
-         new_train['peak_rss'], 'bytes'),
-        ('peak memory (prediction)', legacy_predict['peak_rss'],
-         new_predict['peak_rss'], 'bytes'),
-        ('total disk read', legacy_train['rchar'] + legacy_predict['rchar'],
-         new_train['rchar'] + new_predict['rchar'], 'bytes'),
-        ('total disk write', legacy_train['wchar'] + legacy_predict['wchar'],
-         new_train['wchar'] + new_predict['wchar'], 'bytes'),
-        ('decoder size', legacy_stored, new_stored, 'bytes'),
-    )
-
-    header = '%-26s | %12s | %12s | %14s' % ('', 'legacy', 'factorized',
+    header = '%-26s | %12s | %12s | %18s' % ('', 'legacy', 'factorized',
                                              'change')
     print(header)
     print('-' * len(header))
-    for label, legacy, factorized, unit in rows:
-        if unit == 'seconds':
-            shown = ('%.1f s' % legacy, '%.1f s' % factorized)
+    for label in legacy:
+        cells = []
+        for value in (legacy[label], factorized[label]):
+            if value is None:
+                cells.append(KILLED)
+            elif label in seconds:
+                cells.append('%.1f s' % value)
+            else:
+                cells.append(human_bytes(value))
+        if legacy[label] is None or factorized[label] is None:
+            note = ('legacy did not fit' if legacy[label] is None
+                    else 'factorized did not fit')
         else:
-            shown = (human_bytes(legacy), human_bytes(factorized))
-        print('%-26s | %12s | %12s | %14s'
-              % (label, shown[0], shown[1], change(legacy, factorized)))
+            note = change(legacy[label], factorized[label])
+        print('%-26s | %12s | %12s | %18s'
+              % (label, cells[0], cells[1], note))
 
 
 def print_phases(results, baseline):
@@ -700,6 +721,10 @@ def print_phases(results, baseline):
     for variant in ('legacy', 'factorized'):
         for name, report in (('training', results[variant][0]),
                              ('prediction', results[variant][1])):
+            if report.get('killed'):
+                print('%-12s | %-10s | %8s | %10s | %10s | %10s | %11s | %11s'
+                      % (variant, name, '-', KILLED, '-', '-', '-', '-'))
+                continue
             print('%-12s | %-10s | %8.1f | %10s | %10s | %10s | %11s | %11s'
                   % (variant, name, report['wall_seconds'],
                      human_bytes(report['peak_rss']),
@@ -728,6 +753,10 @@ def print_breakdown(results):
     print('-' * len(header))
     for variant in ('legacy', 'factorized'):
         report = results[variant][1]
+        if report.get('killed'):
+            print('%-12s | %10s | %12s | %15s | %11s | %9s'
+                  % (variant, '-', '-', '-', '-', '-'))
+            continue
         inference = max(report['inference_seconds']
                         - report['model_load_seconds'], 0.0)
         rest = max(report['phase_seconds'] - report['inference_seconds']
@@ -798,6 +827,9 @@ def print_sanity(results):
           'model loads/writes')
     for variant in ('legacy', 'factorized'):
         training, prediction = results[variant][0], results[variant][1]
+        if training.get('killed') or prediction.get('killed'):
+            print('  %-11s not checked: the run did not complete' % variant)
+            continue
         print('  %-11s training: %5d feature loads, %2d models written; '
               'prediction: %5d feature loads, %3d models read'
               % (variant, training['feature_loads'], training['model_dumps'],
@@ -861,6 +893,10 @@ def main():
         print('Scaled down by %g: trials, voxels and output units divided by '
               'the same factor, so their ratios are the profile\'s.'
               % args.scale)
+    print('Machine memory: %s. A phase that does not fit is reported as '
+          '%s rather than ending the run.'
+          % (human_bytes(os.sysconf('SC_PAGE_SIZE')
+                         * os.sysconf('SC_PHYS_PAGES')), KILLED))
     print('%s page cache; best of %d; %d BLAS thread(s); training and '
           'prediction each in their own process.'
           % ('Cold (inputs evicted before every phase)' if cold
@@ -879,13 +915,25 @@ def main():
                              legacy_script, args.threads, cold)
 
         results = {}
+        complete = []
         for variant in ('legacy', 'factorized'):
             results[variant] = run_variant(variant, dataset, workdir,
                                            legacy_script, args.threads, cold,
                                            repeats)
-            check_expected_counts(variant, results[variant][0],
-                                  results[variant][1], dataset)
-        cross_check(results, dataset)
+            training, prediction = results[variant][0], results[variant][1]
+            if training.get('killed') or prediction.get('killed'):
+                continue
+            check_expected_counts(variant, training, prediction, dataset)
+            complete.append(variant)
+
+        if len(complete) == 2:
+            cross_check(results, dataset)
+        else:
+            print('One variant did not complete, so the two-variant checks '
+                  '(identical decoded features, identical normalization '
+                  'parameters) were skipped. The other variant was measured '
+                  'and checked on its own.')
+            print('')
 
         print_headline(results)
         print_phases(results, baseline)

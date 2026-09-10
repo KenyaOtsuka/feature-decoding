@@ -11,9 +11,11 @@ change no production code: they are evidence, not product. The branch is the
 PR's factorization commit (`8c47da0`) plus this directory.
 
 Machine: 4 vCPU, 15 GB RAM, local virtio disk, Python 3.11, 4 BLAS threads,
-cold page cache (inputs evicted before every phase). Both profiles use
-**10 000 voxels**, the scale of a real ROI (which runs to ~15 000) and the same
-number the DeepRecon extrapolation below assumes.
+cold page cache (inputs evicted before every phase). The `fc` profile and the
+full-size `conv` run use **10 000 voxels** — the scale of a real ROI, which
+runs to ~15 000, and the number the DeepRecon extrapolation below assumes. The
+comparable `conv` table is a scaled-down run at 5000 voxels, for the reason
+given there.
 
 ## Results
 
@@ -30,8 +32,8 @@ repetitions = 6000 trials, 10 000 voxels, 50 test stimuli x 2 repetitions,
 | total time | 258.8 s | 69.2 s | **3.7x less** |
 | peak memory (training) | 2.9 GB | 3.0 GB | about the same |
 | peak memory (prediction) | 362.1 MB | 289.9 MB | 1.2x less |
-| total disk read | 2.6 GB | 1.6 GB | 1.7x less |
-| total disk write | 1.4 GB | 193.8 MB | **7.3x less** |
+| total bytes read | 2.6 GB | 1.6 GB | 1.7x less |
+| total bytes written | 1.4 GB | 193.8 MB | **7.3x less** |
 | decoder size | 1.4 GB | 183.5 MB | **7.7x less** |
 
 ### `conv` profile — one convolutional layer
@@ -56,8 +58,8 @@ of 2, keeping the regime `d_out >> d_in > n` that this profile exists to show:
 | total time | 51.0 s | 9.6 s | **5.3x less** |
 | peak memory (training) | 3.7 GB | 781.4 MB | **4.9x less** |
 | peak memory (prediction) | 1.1 GB | 397.3 MB | **2.9x less** |
-| total disk read | 1.2 GB | 308.1 MB | 4.1x less |
-| total disk write | 966.7 MB | 20.9 MB | **46.3x less** |
+| total bytes read | 1.2 GB | 308.1 MB | 4.1x less |
+| total bytes written | 966.7 MB | 20.9 MB | **46.3x less** |
 | decoder size | 957.6 MB | 11.5 MB | **83.3x less** |
 
 ### What the tables say
