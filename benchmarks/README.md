@@ -36,20 +36,36 @@ repetitions = 6000 trials, 10 000 voxels, 50 test stimuli x 2 repetitions,
 | total bytes written | 1.4 GB | 193.8 MB | **7.3x less** |
 | decoder size | 1.4 GB | 183.5 MB | **7.7x less** |
 
-### `conv` profile — one convolutional layer
+### `conv` profile at full size — the legacy pipeline does not run
 
-**At full size the legacy pipeline does not run on this machine.** With
-`conv5_1` (100 352 units), 6000 trials and 10 000 voxels, legacy training was
-killed by the OOM killer (`SIGKILL`) on 15 GB of RAM: its coefficient matrix
-alone is `100 352 x 10 000 x 4 B` = 4.0 GB, on top of a 6000 x 100 352 target
-and the dual solve's intermediate of the same shape. The factorized fit at the
-same size needs none of that. That is a result, not a benchmark failure, and
-the script now reports it as one.
+`conv5_1` (100 352 units), 1200 training stimuli x 5 repetitions = 6000 trials,
+10 000 voxels, 1 subject x 1 ROI. Legacy training is killed by the OOM killer
+on 15.7 GB of RAM; the factorized run finishes on the same machine, on the same
+data:
 
-To get a comparable pair, all three dimensions are divided by the same factor
-of 2, keeping the regime `d_out >> d_in > n` that this profile exists to show:
-**50 176 units, 5000 voxels, 3000 trials** (600 stimuli x 5 repetitions),
-50 test stimuli x 2 repetitions, 1 subject x 1 ROI:
+| | legacy | factorized |
+| --- | --- | --- |
+| training time | **OOM (SIGKILL)** | 14.0 s |
+| prediction time | — | 12.5 s |
+| total time | — | **26.5 s** |
+| peak memory (training) | **did not fit in 15.7 GB** | **2.5 GB** |
+| peak memory (prediction) | — | 1.1 GB |
+| total bytes read | — | 1005.9 MB |
+| total bytes written | — | 64.2 MB |
+| decoder size | — | 45.9 MB |
+
+The legacy coefficient matrix alone would be `100 352 x 10 000 x 4 B` = 4.0 GB
+(arithmetic — it never got that far), on top of a 6000 x 100 352 target and the
+dual solve's intermediate of the same shape. The factorized fit's target is
+6000 x 1200 instead, and its decoder is 45.9 MB.
+
+### `conv` scaled down by 2 — the like-for-like comparison
+
+To compare the two, all three dimensions are divided by the same factor of 2,
+keeping the regime `d_out >> d_in > n` that this profile exists to show, rather
+than substituting a narrower layer: **50 176 units, 5000 voxels, 3000 trials**
+(600 stimuli x 5 repetitions), 50 test stimuli x 2 repetitions,
+1 subject x 1 ROI:
 
 | | legacy | factorized | change |
 | --- | --- | --- | --- |
@@ -73,8 +89,9 @@ of 2, keeping the regime `d_out >> d_in > n` that this profile exists to show:
 - **Memory is where the wide layer decides it.** On `fc` the two are equal
   (2.9 GB against 3.0 GB): both are dominated by the fMRI matrix and the
   kernel. On a convolutional layer the legacy peak follows `d_out` — 3.7 GB at
-  half size, and at full size it does not fit in 15 GB at all — while the
-  factorized peak does not (781 MB).
+  half size, and at full size it does not fit in 15.7 GB at all, while the
+  factorized run trains there in 14.0 s at a 2.5 GB peak. That is the
+  difference between needing a bigger machine and not.
 - **Prediction is roughly a tie**, and which side wins depends on the layer:
   10.3 s against 11.3 s on `fc` (the legacy run loading 1.4 GB of models, the
   factorized one loading 3600 feature files), 6.6 s against 5.2 s on `conv`
@@ -95,7 +112,17 @@ of 2, keeping the regime `d_out >> d_in > n` that this profile exists to show:
 | factorized | prediction | 11.3 | 289.9 MB | 671.1 MB | 10.1 MB | 256.0 MB | 10.9 MB |
 | (reference) | imports only | 3.5 | 160.5 MB | 34.2 MB | 3.2 KB | 2.1 MB | 4.0 KB |
 
-`conv` (scaled by 2, as above):
+`conv` at full size (legacy did not complete):
+
+| variant | phase | time [s] | peak RSS | read | written | device read | device written |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| legacy | training | — | **OOM (SIGKILL)** | — | — | — | — |
+| legacy | prediction | — | not run (no decoder) | — | — | — | — |
+| factorized | training | 14.0 | 2.5 GB | 493.2 MB | 46.0 MB | 652.4 MB | 46.0 MB |
+| factorized | prediction | 12.5 | 1.1 GB | 512.8 MB | 18.2 MB | 475.8 MB | 18.4 MB |
+| (reference) | imports only | 3.2 | 160.5 MB | 34.2 MB | 3.2 KB | 0 B | 0 B |
+
+`conv` scaled by 2:
 
 | variant | phase | time [s] | peak RSS | read | written | device read | device written |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -115,8 +142,10 @@ under every row, and the reason no row reads less than ~34 MB or peaks below
 | --- | --- | --- | --- | --- | --- | --- |
 | fc | legacy | 6.1 | 0.0 | 0.6 | 0.0 | 2.2 |
 | fc | factorized | 1.1 | 6.1 | 0.2 | 0.1 | 2.4 |
-| conv | legacy | 4.4 | 0.0 | 0.3 | 0.0 | 0.4 |
-| conv | factorized | 0.0 | 2.1 | 0.0 | 0.0 | 1.7 |
+| conv (full) | legacy | — | — | — | — | — |
+| conv (full) | factorized | 0.0 | 7.5 | 0.0 | 0.1 | 3.3 |
+| conv (scaled) | legacy | 4.4 | 0.0 | 0.3 | 0.0 | 0.4 |
+| conv (scaled) | factorized | 0.0 | 2.1 | 0.0 | 0.0 | 1.7 |
 
 "the rest" is reading the test fMRI, averaging it and writing the decoded
 features — identical work for both. The two paths pay in different places: the
@@ -178,15 +207,18 @@ git checkout bench/pr7-benchmarks
 uv sync --group dev
 
 uv run python -m benchmarks.bench_pipeline                     # fc, ~7 min, ~5 GB temp
-uv run python -m benchmarks.bench_pipeline --profile conv --scale 2   # ~5 min
+uv run python -m benchmarks.bench_pipeline --profile conv      # full size, ~10 min
+uv run python -m benchmarks.bench_pipeline --profile conv --scale 2   # the comparable pair
 uv run python -m benchmarks.bench_pipeline --profile quick     # smoke test, seconds
 uv run python -m benchmarks.bench_ridge_factorization          # the d_out scaling, ~10 s
 ```
 
-`--profile conv` without `--scale` needs more than 15 GB of RAM; if a phase is
-killed the script says so and points at `--scale`, which divides trials, voxels
-and output units by one common factor so the profile's `d_out : d_in : n` is
-preserved. `--voxels` overrides the voxel count (real ROIs run to ~15 000),
+A phase that does not fit in memory is reported as `OOM (SIGKILL)` and the run
+continues, so `--profile conv` measures the factorized side even though legacy
+training is killed. `--scale` divides trials, voxels and output units by one
+common factor, preserving the profile's `d_out : d_in : n`, which is how the
+comparable conv pair above is produced. When one variant does not complete the
+two-variant cross-checks are skipped and the run says so. `--voxels` overrides the voxel count (real ROIs run to ~15 000),
 `-r/--repeats` the timed runs per variant, `-t/--threads` the BLAS threads
 (default: every core), `--warm` leaves the page cache alone. Temporary data
 goes to a temporary directory and is removed afterwards.
@@ -217,9 +249,10 @@ goes to a temporary directory and is removed afterwards.
   legacy `d_out x n_voxels` model. Numbers measured at 1000 voxels (an earlier
   version of this file) overstated the training speed-up and understated the
   legacy prediction cost.
-- **The rows are checked, not assumed.** The script asserts that both variants
-  decode the same features (`rtol=1e-4`), that their `x_mean`/`x_norm`/
-  `y_mean`/`y_norm` agree, and that the feature and model load counts are what
-  the two code paths should produce (`fc`: 14400 feature loads and 12 models
+- **The rows are checked, not assumed.** Whenever both variants complete, the
+  script asserts that they decode the same features (`rtol=1e-4`) and that
+  their `x_mean`/`x_norm`/`y_mean`/`y_norm` agree; each variant's feature and
+  model load counts are asserted on their own, so they still hold in the
+  full-size conv run where legacy was killed (`fc`: 14400 feature loads and 12 models
   written by legacy training against none and 4; 0 against 3600 feature loads
   at prediction, 12 model loads either way).

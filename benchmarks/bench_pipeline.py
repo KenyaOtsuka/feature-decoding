@@ -688,7 +688,7 @@ def print_headline(results):
     factorized = _totals(results['factorized'])
     seconds = ('training time', 'prediction time', 'total time')
 
-    header = '%-26s | %12s | %12s | %18s' % ('', 'legacy', 'factorized',
+    header = '%-26s | %13s | %13s | %18s' % ('', 'legacy', 'factorized',
                                              'change')
     print(header)
     print('-' * len(header))
@@ -706,12 +706,12 @@ def print_headline(results):
                     else 'factorized did not fit')
         else:
             note = change(legacy[label], factorized[label])
-        print('%-26s | %12s | %12s | %18s'
+        print('%-26s | %13s | %13s | %18s'
               % (label, cells[0], cells[1], note))
 
 
 def print_phases(results, baseline):
-    header = ('%-12s | %-10s | %8s | %10s | %10s | %10s | %11s | %11s'
+    header = ('%-12s | %-10s | %8s | %13s | %10s | %10s | %11s | %11s'
               % ('variant', 'phase', 'time [s]', 'peak RSS', 'read',
                  'written', 'device read', 'device wr.'))
     print('')
@@ -722,17 +722,17 @@ def print_phases(results, baseline):
         for name, report in (('training', results[variant][0]),
                              ('prediction', results[variant][1])):
             if report.get('killed'):
-                print('%-12s | %-10s | %8s | %10s | %10s | %10s | %11s | %11s'
+                print('%-12s | %-10s | %8s | %13s | %10s | %10s | %11s | %11s'
                       % (variant, name, '-', KILLED, '-', '-', '-', '-'))
                 continue
-            print('%-12s | %-10s | %8.1f | %10s | %10s | %10s | %11s | %11s'
+            print('%-12s | %-10s | %8.1f | %13s | %10s | %10s | %11s | %11s'
                   % (variant, name, report['wall_seconds'],
                      human_bytes(report['peak_rss']),
                      human_bytes(report['rchar']),
                      human_bytes(report['wchar']),
                      human_bytes(report['read_bytes']),
                      human_bytes(report['write_bytes'])))
-    print('%-12s | %-10s | %8.1f | %10s | %10s | %10s | %11s | %11s'
+    print('%-12s | %-10s | %8.1f | %13s | %10s | %10s | %11s | %11s'
           % ('(reference)', 'imports', baseline['wall_seconds'],
              human_bytes(baseline['peak_rss']), human_bytes(baseline['rchar']),
              human_bytes(baseline['wchar']),
