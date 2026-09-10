@@ -35,6 +35,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -497,10 +498,23 @@ def run_phase(phase, variant, dataset, workdir, decoder_dir, decoded_dir,
         json.dump(spec, f)
 
     start = perf_counter()
-    subprocess.run([sys.executable, '-m', 'benchmarks.bench_pipeline',
-                    '--worker', spec_path],
-                   cwd=REPO_ROOT, check=True,
-                   stdout=subprocess.DEVNULL, stderr=None)
+    try:
+        subprocess.run([sys.executable, '-m', 'benchmarks.bench_pipeline',
+                        '--worker', spec_path],
+                       cwd=REPO_ROOT, check=True,
+                       stdout=subprocess.DEVNULL, stderr=None)
+    except subprocess.CalledProcessError as error:
+        if error.returncode == -signal.SIGKILL:
+            # Not a crash but a result: the phase did not fit in this
+            # machine's memory.  Scaling keeps d_out : d_in : n, so the
+            # smaller run is still the same regime.
+            raise SystemExit(
+                '%s %s was killed (SIGKILL): it did not fit in this machine\'s '
+                'memory. Re-run with --scale (e.g. --scale 2), which divides '
+                'trials, voxels and output units by one common factor and so '
+                'keeps the profile\'s d_out : d_in : n.'
+                % (variant, phase))
+        raise
     wall = perf_counter() - start
 
     with open(report_path) as f:
