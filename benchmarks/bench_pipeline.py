@@ -64,12 +64,18 @@ PROFILES = {
     'quick': dict(layers=(('fc8', 1000),), n_stimuli=50, n_repeats=5,
                   n_test=10, n_voxels=300, n_subjects=2, n_rois=2, repeats=1),
     'fc': dict(layers=(('fc6', 4096), ('fc7', 4096), ('fc8', 1000)),
-               n_stimuli=1200, n_repeats=5, n_test=50, n_voxels=1000,
-               n_subjects=2, n_rois=2, repeats=2),
+               n_stimuli=1200, n_repeats=5, n_test=50, n_voxels=10000,
+               n_subjects=2, n_rois=2, repeats=1),
     'conv': dict(layers=(('conv5_1', 14 * 14 * 512),), n_stimuli=1200,
-                 n_repeats=5, n_test=50, n_voxels=1000, n_subjects=1,
+                 n_repeats=5, n_test=50, n_voxels=10000, n_subjects=1,
                  n_rois=1, repeats=1),
 }
+
+# `conv` puts d_out >> d_in > n (100352 >> 10000 > 6000), which is the regime
+# a convolutional layer of a real ROI is in.  If it does not fit in memory,
+# --scale divides all three by the same factor instead of changing the layer,
+# so the regime is preserved.  Voxel counts of real ROIs run to ~15000; 10000
+# is what these runs measure.
 N_TEST_REPEATS = 2
 
 # DeepRecon VGG19 "allunits": units per stimulus over the 16 conv and 3 fc
@@ -797,6 +803,13 @@ def main():
                              'smoke test')
     parser.add_argument('-r', '--repeats', type=int, default=None,
                         help='timed train+predict runs per variant (best wins)')
+    parser.add_argument('--voxels', type=int, default=None,
+                        help='override the profile\'s voxel count (real ROIs '
+                             'run to ~15000; the profiles measure 10000)')
+    parser.add_argument('--scale', type=float, default=1.0,
+                        help='divide trials, voxels and output units by this '
+                             'common factor, keeping their ratios, when the '
+                             'profile does not fit in memory')
     parser.add_argument('-t', '--threads', type=int, default=os.cpu_count(),
                         help='BLAS threads (default: every core, as a real run '
                              'would use)')
@@ -809,6 +822,16 @@ def main():
         return
 
     profile = dict(PROFILES[args.profile])
+    if args.voxels:
+        profile['n_voxels'] = args.voxels
+    if args.scale != 1.0:
+        # One factor for all three dimensions, so d_out : d_in : n is what the
+        # profile says it is, only smaller.
+        profile['n_stimuli'] = max(int(profile['n_stimuli'] / args.scale), 2)
+        profile['n_voxels'] = max(int(profile['n_voxels'] / args.scale), 1)
+        profile['layers'] = tuple(
+            (name, max(int(units / args.scale), 1))
+            for name, units in profile['layers'])
     repeats = args.repeats or profile['repeats']
     cold = not args.warm
 
@@ -820,6 +843,10 @@ def main():
              profile['n_stimuli'], profile['n_repeats'], profile['n_test'],
              N_TEST_REPEATS, profile['n_voxels'], profile['n_subjects'],
              profile['n_rois'], ALPHA))
+    if args.scale != 1.0:
+        print('Scaled down by %g: trials, voxels and output units divided by '
+              'the same factor, so their ratios are the profile\'s.'
+              % args.scale)
     print('%s page cache; best of %d; %d BLAS thread(s); training and '
           'prediction each in their own process.'
           % ('Cold (inputs evicted before every phase)' if cold
